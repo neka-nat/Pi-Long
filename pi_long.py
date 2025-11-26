@@ -96,6 +96,13 @@ class Pi_Long:
         self.all_camera_poses = []
         
         self.delete_temp_files = self.config['Model']['delete_temp_files']
+        self.temp_files_location = self.config['Model']['temp_files_location'] # 'disk' or 'cpu_memory'
+        
+        # 初始化用于内存存储的字典
+        if self.temp_files_location == 'cpu_memory':
+            self.temp_storage = {}
+        else:
+            self.temp_storage = None
 
         print('Loading model...')
 
@@ -198,30 +205,52 @@ class Pi_Long:
 
 
         print("Processing model outputs...")
-        for key in predictions.keys():
-            if isinstance(predictions[key], torch.Tensor):
-                predictions[key] = predictions[key].cpu().numpy().squeeze(0)
         
-        # Save predictions to disk instead of keeping in memory
-        if is_loop:
-            save_dir = self.result_loop_dir
-            filename = f"loop_{range_1[0]}_{range_1[1]}_{range_2[0]}_{range_2[1]}.npy"
+        if self.temp_files_location == 'cpu_memory':
+            if is_loop:
+                key = f"loop_{range_1[0]}_{range_1[1]}_{range_2[0]}_{range_2[1]}"
+            else:
+                if chunk_idx is None:
+                    raise ValueError("chunk_idx must be provided when is_loop is False")
+                key = f"chunk_{chunk_idx}"
+            
+            predictions_cpu = {}
+            for k, v in predictions.items():
+                if isinstance(v, torch.Tensor):
+                    predictions_cpu[k] = v.cpu().numpy().squeeze(0)
+            
+            if not is_loop and range_2 is None:
+                extrinsics = predictions_cpu['camera_poses']
+                chunk_range = self.chunk_indices[chunk_idx]
+                self.all_camera_poses.append((chunk_range, extrinsics))
+            
+            self.temp_storage[key] = predictions_cpu
+            return predictions_cpu if is_loop or range_2 is not None else None
         else:
-            if chunk_idx is None:
-                raise ValueError("chunk_idx must be provided when is_loop is False")
-            save_dir = self.result_unaligned_dir
-            filename = f"chunk_{chunk_idx}.npy"
-        
-        save_path = os.path.join(save_dir, filename)
-                    
-        if not is_loop and range_2 is None:
-            extrinsics = predictions['camera_poses']
-            chunk_range = self.chunk_indices[chunk_idx]
-            self.all_camera_poses.append((chunk_range, extrinsics))
+            for key in predictions.keys():
+                if isinstance(predictions[key], torch.Tensor):
+                    predictions[key] = predictions[key].cpu().numpy().squeeze(0)
+            
+            # Save predictions to disk instead of keeping in memory
+            if is_loop:
+                save_dir = self.result_loop_dir
+                filename = f"loop_{range_1[0]}_{range_1[1]}_{range_2[0]}_{range_2[1]}.npy"
+            else:
+                if chunk_idx is None:
+                    raise ValueError("chunk_idx must be provided when is_loop is False")
+                save_dir = self.result_unaligned_dir
+                filename = f"chunk_{chunk_idx}.npy"
+            
+            save_path = os.path.join(save_dir, filename)
+                        
+            if not is_loop and range_2 is None:
+                extrinsics = predictions['camera_poses']
+                chunk_range = self.chunk_indices[chunk_idx]
+                self.all_camera_poses.append((chunk_range, extrinsics))
 
-        np.save(save_path, predictions)
-        
-        return predictions if is_loop or range_2 is not None else None
+            np.save(save_path, predictions)
+            
+            return predictions if is_loop or range_2 is not None else None
     
     def process_long_sequence(self):
         if self.overlap >= self.chunk_size:
@@ -267,13 +296,17 @@ class Pi_Long:
         for chunk_idx in range(len(self.chunk_indices)-1):
 
             print(f"Aligning {chunk_idx} and {chunk_idx+1} (Total {len(self.chunk_indices)-1})")
-            chunk_data1 = np.load(os.path.join(self.result_unaligned_dir, f"chunk_{chunk_idx}.npy"), allow_pickle=True).item()
-            chunk_data2 = np.load(os.path.join(self.result_unaligned_dir, f"chunk_{chunk_idx+1}.npy"), allow_pickle=True).item()
+            if self.temp_files_location == 'cpu_memory':
+                chunk_data1 = self.temp_storage[f"chunk_{chunk_idx}"]
+                chunk_data2 = self.temp_storage[f"chunk_{chunk_idx+1}"]
+            else:
+                chunk_data1 = np.load(os.path.join(self.result_unaligned_dir, f"chunk_{chunk_idx}.npy"), allow_pickle=True).item()
+                chunk_data2 = np.load(os.path.join(self.result_unaligned_dir, f"chunk_{chunk_idx+1}.npy"), allow_pickle=True).item()
             
             point_map1 = chunk_data1['points'][-self.overlap:]
             point_map2 = chunk_data2['points'][:self.overlap]
-            conf1 = chunk_data1['conf'][-self.overlap:]
-            conf2 = chunk_data2['conf'][:self.overlap]
+            conf1 = np.squeeze(chunk_data1['conf'][-self.overlap:])
+            conf2 = np.squeeze(chunk_data2['conf'][:self.overlap])
 
             conf_threshold = min(np.median(conf1), np.median(conf2)) * 0.1
             s, R, t = weighted_align_point_maps(point_map1, 
@@ -304,7 +337,11 @@ class Pi_Long:
                 print(self.chunk_indices[chunk_idx_a])
                 print(chunk_a_range)
                 print(chunk_a_rela_begin, chunk_a_rela_end)
-                chunk_data_a = np.load(os.path.join(self.result_unaligned_dir, f"chunk_{chunk_idx_a}.npy"), allow_pickle=True).item()
+
+                if self.temp_files_location == 'cpu_memory':
+                    chunk_data_a = self.temp_storage[f"chunk_{chunk_idx_a}"]
+                else:
+                    chunk_data_a = np.load(os.path.join(self.result_unaligned_dir, f"chunk_{chunk_idx_a}.npy"), allow_pickle=True).item()
                 
                 point_map_a = chunk_data_a['points'][chunk_a_rela_begin:chunk_a_rela_end]
                 conf_a = chunk_data_a['conf'][chunk_a_rela_begin:chunk_a_rela_end]
@@ -328,7 +365,11 @@ class Pi_Long:
                 print(self.chunk_indices[chunk_idx_b])
                 print(chunk_b_range)
                 print(chunk_b_rela_begin, chunk_b_rela_end)
-                chunk_data_b = np.load(os.path.join(self.result_unaligned_dir, f"chunk_{chunk_idx_b}.npy"), allow_pickle=True).item()
+
+                if self.temp_files_location == 'cpu_memory':
+                    chunk_data_b = self.temp_storage[f"chunk_{chunk_idx_b}"]
+                else:
+                    chunk_data_b = np.load(os.path.join(self.result_unaligned_dir, f"chunk_{chunk_idx_b}.npy"), allow_pickle=True).item()
                 
                 point_map_b = chunk_data_b['points'][chunk_b_rela_begin:chunk_b_rela_end]
                 conf_b = chunk_data_b['conf'][chunk_b_rela_begin:chunk_b_rela_end]
@@ -389,18 +430,29 @@ class Pi_Long:
             print(f'Applying {chunk_idx+1} -> {chunk_idx} (Total {len(self.chunk_indices)-1})')
             s, R, t = self.sim3_list[chunk_idx]
             
-            chunk_data = np.load(os.path.join(self.result_unaligned_dir, f"chunk_{chunk_idx+1}.npy"), allow_pickle=True).item()
+            if self.temp_files_location == 'cpu_memory':
+                chunk_data = self.temp_storage[f"chunk_{chunk_idx+1}"]
+            else:
+                chunk_data = np.load(os.path.join(self.result_unaligned_dir, f"chunk_{chunk_idx+1}.npy"), allow_pickle=True).item()
             
             chunk_data['points'] = apply_sim3_direct(chunk_data['points'], s, R, t)
             
-            aligned_path = os.path.join(self.result_aligned_dir, f"chunk_{chunk_idx+1}.npy")
-            np.save(aligned_path, chunk_data)
+            if self.temp_files_location == 'cpu_memory':
+                self.temp_storage[f"chunk_{chunk_idx+1}"] = chunk_data
+            else:
+                aligned_path = os.path.join(self.result_aligned_dir, f"chunk_{chunk_idx+1}.npy")
+                np.save(aligned_path, chunk_data)
             
             if chunk_idx == 0:
-                chunk_data_first = np.load(os.path.join(self.result_unaligned_dir, f"chunk_0.npy"), allow_pickle=True).item()
-                np.save(os.path.join(self.result_aligned_dir, "chunk_0.npy"), chunk_data_first)
+                if self.temp_files_location == 'cpu_memory':
+                    chunk_data_first = self.temp_storage[f"chunk_0"]
+                else:
+                    chunk_data_first = np.load(os.path.join(self.result_unaligned_dir, f"chunk_0.npy"), allow_pickle=True).item()
             
-            aligned_chunk_data = np.load(os.path.join(self.result_aligned_dir, f"chunk_{chunk_idx}.npy"), allow_pickle=True).item() if chunk_idx > 0 else chunk_data_first
+            if self.temp_files_location == 'cpu_memory':
+                aligned_chunk_data = self.temp_storage[f"chunk_{chunk_idx}"] if chunk_idx > 0 else chunk_data_first
+            else:
+                aligned_chunk_data = np.load(os.path.join(self.result_aligned_dir, f"chunk_{chunk_idx}.npy"), allow_pickle=True).item() if chunk_idx > 0 else chunk_data_first
             
             points = aligned_chunk_data['points'].reshape(-1, 3)
             colors = (aligned_chunk_data['images'].transpose(0, 2, 3, 1).reshape(-1, 3) * 255).astype(np.uint8)
@@ -482,6 +534,7 @@ class Pi_Long:
                 c2w = chunk_extrinsics[i] # camera pose of Pi3 is C2W while it is W2C in VGGT!
 
                 transformed_c2w = S @ c2w  # Be aware of the left multiplication!
+                transformed_c2w[:3, :3] /= s  # Normalize rotation
 
                 all_poses[idx] = transformed_c2w
 
@@ -620,5 +673,5 @@ if __name__ == '__main__':
     input_dir = os.path.join(save_dir, f'pcd')
     print("Saving all the point clouds")
     merge_ply_files(input_dir, all_ply_path)
-    print('VGGT Long done.')
+    print('Pi-Long done.')
     sys.exit()

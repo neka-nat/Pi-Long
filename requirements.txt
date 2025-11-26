@@ -17,3 +17,5 @@ prettytable
 pytorch-lightning
 pytorch-metric-learning
 torchmetrics
+
+pypose
