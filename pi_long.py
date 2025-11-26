@@ -331,7 +331,7 @@ class Pi_Long:
 
                 print('chunk_a align')
                 point_map_loop = item[1]['points'][:chunk_a_range[1] - chunk_a_range[0]]
-                conf_loop = item[1]['conf'][:chunk_a_range[1] - chunk_a_range[0]]
+                conf_loop = np.squeeze(item[1]['conf'][:chunk_a_range[1] - chunk_a_range[0]])
                 chunk_a_rela_begin = chunk_a_range[0] - self.chunk_indices[chunk_idx_a][0]
                 chunk_a_rela_end = chunk_a_rela_begin + chunk_a_range[1] - chunk_a_range[0]
                 print(self.chunk_indices[chunk_idx_a])
@@ -344,7 +344,7 @@ class Pi_Long:
                     chunk_data_a = np.load(os.path.join(self.result_unaligned_dir, f"chunk_{chunk_idx_a}.npy"), allow_pickle=True).item()
                 
                 point_map_a = chunk_data_a['points'][chunk_a_rela_begin:chunk_a_rela_end]
-                conf_a = chunk_data_a['conf'][chunk_a_rela_begin:chunk_a_rela_end]
+                conf_a = np.squeeze(chunk_data_a['conf'][chunk_a_rela_begin:chunk_a_rela_end])
             
                 conf_threshold = min(np.median(conf_a), np.median(conf_loop)) * 0.1
                 s_a, R_a, t_a = weighted_align_point_maps(point_map_a, 
@@ -359,7 +359,7 @@ class Pi_Long:
 
                 print('chunk_a align')
                 point_map_loop = item[1]['points'][-chunk_b_range[1] + chunk_b_range[0]:]
-                conf_loop = item[1]['conf'][-chunk_b_range[1] + chunk_b_range[0]:]
+                conf_loop = np.squeeze(item[1]['conf'][-chunk_b_range[1] + chunk_b_range[0]:])
                 chunk_b_rela_begin = chunk_b_range[0] - self.chunk_indices[chunk_idx_b][0]
                 chunk_b_rela_end = chunk_b_rela_begin + chunk_b_range[1] - chunk_b_range[0]
                 print(self.chunk_indices[chunk_idx_b])
@@ -372,7 +372,7 @@ class Pi_Long:
                     chunk_data_b = np.load(os.path.join(self.result_unaligned_dir, f"chunk_{chunk_idx_b}.npy"), allow_pickle=True).item()
                 
                 point_map_b = chunk_data_b['points'][chunk_b_rela_begin:chunk_b_rela_end]
-                conf_b = chunk_data_b['conf'][chunk_b_rela_begin:chunk_b_rela_end]
+                conf_b = np.squeeze(chunk_data_b['conf'][chunk_b_rela_begin:chunk_b_rela_end])
             
                 conf_threshold = min(np.median(conf_b), np.median(conf_loop)) * 0.1
                 s_b, R_b, t_b = weighted_align_point_maps(point_map_b, 
@@ -448,7 +448,19 @@ class Pi_Long:
                     chunk_data_first = self.temp_storage[f"chunk_0"]
                 else:
                     chunk_data_first = np.load(os.path.join(self.result_unaligned_dir, f"chunk_0.npy"), allow_pickle=True).item()
-            
+                points = chunk_data_first['points'].reshape(-1, 3)
+                colors = (chunk_data_first['images'].transpose(0, 2, 3, 1).reshape(-1, 3) * 255).astype(np.uint8)
+                confs = chunk_data_first['conf'].reshape(-1)
+                ply_path = os.path.join(self.pcd_dir, f'{chunk_idx}_pcd.ply')
+                save_confident_pointcloud_batch(
+                    points=points,              # shape: (H, W, 3)
+                    colors=colors,              # shape: (H, W, 3)
+                    confs=confs,          # shape: (H, W)
+                    output_path=ply_path,
+                    conf_threshold=np.mean(confs) * self.config['Model']['Pointcloud_Save']['conf_threshold_coef'],
+                    sample_ratio=self.config['Model']['Pointcloud_Save']['sample_ratio']
+                )
+
             if self.temp_files_location == 'cpu_memory':
                 aligned_chunk_data = self.temp_storage[f"chunk_{chunk_idx}"] if chunk_idx > 0 else chunk_data_first
             else:
@@ -457,7 +469,7 @@ class Pi_Long:
             points = aligned_chunk_data['points'].reshape(-1, 3)
             colors = (aligned_chunk_data['images'].transpose(0, 2, 3, 1).reshape(-1, 3) * 255).astype(np.uint8)
             confs = aligned_chunk_data['conf'].reshape(-1)
-            ply_path = os.path.join(self.pcd_dir, f'{chunk_idx}_pcd.ply')
+            ply_path = os.path.join(self.pcd_dir, f'{chunk_idx+1}_pcd.ply')
             save_confident_pointcloud_batch(
                 points=points,              # shape: (H, W, 3)
                 colors=colors,              # shape: (H, W, 3)
