@@ -33,6 +33,8 @@ As can be seen from the experiments, `Pi-Long`, implemented based on `Pi3`, exhi
 
 ### **Updates**
 
+`[TO BE DONE]` We are working on the COLMAP format support.
+
 `[26 Nov 2025]` Changes in repo of `VGGT-Long` are synced to this repo. Including speed-up, you can also choose in the config file to store the intermediate results in the CPU memory, which will result in faster speed (but please ensure there is sufficient CPU memory). 
 
 `[06 Nov 2025]` Demo video of `Pi-Long` uploaded.
