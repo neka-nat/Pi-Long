@@ -68,8 +68,9 @@ class LongSeqResult:
         self.all_camera_poses = []
 
 class Pi_Long:
-    def __init__(self, image_dir, save_dir, config):
+    def __init__(self, image_dir, save_dir, config, live_callback=None):
         self.config = config
+        self.live_callback = live_callback  # optional hook to stream intermediate results (chunk_idx, ply_path, camera_centers)
 
         self.chunk_size = self.config['Model']['chunk_size']
         self.overlap = self.config['Model']['overlap']
@@ -460,6 +461,9 @@ class Pi_Long:
                     conf_threshold=np.mean(confs) * self.config['Model']['Pointcloud_Save']['conf_threshold_coef'],
                     sample_ratio=self.config['Model']['Pointcloud_Save']['sample_ratio']
                 )
+                if self.live_callback is not None:
+                    cam_centers = self.get_camera_centers(upto_chunk=chunk_idx)
+                    self.live_callback(chunk_idx, ply_path, cam_centers)
 
             if self.temp_files_location == 'cpu_memory':
                 aligned_chunk_data = self.temp_storage[f"chunk_{chunk_idx}"] if chunk_idx > 0 else chunk_data_first
@@ -478,6 +482,9 @@ class Pi_Long:
                 conf_threshold=np.mean(confs) * self.config['Model']['Pointcloud_Save']['conf_threshold_coef'],
                 sample_ratio=self.config['Model']['Pointcloud_Save']['sample_ratio']
             )
+            if self.live_callback is not None:
+                cam_centers = self.get_camera_centers(upto_chunk=chunk_idx+1)
+                self.live_callback(chunk_idx+1, ply_path, cam_centers)
 
         self.save_camera_poses()
         
@@ -578,6 +585,39 @@ class Pi_Long:
                 f.write(f'{position[0]} {position[1]} {position[2]} {color[0]} {color[1]} {color[2]}\n')
         
         print(f"Camera poses visualization saved to {ply_path}")
+
+    def get_camera_centers(self, upto_chunk=None):
+        """
+        Return camera centers (C2W translation) up to a given chunk index after alignment.
+        This mirrors save_camera_poses but is lightweight for live visualization.
+        """
+        if not self.all_camera_poses:
+            return np.zeros((0, 3))
+        max_chunk = len(self.all_camera_poses) - 1 if upto_chunk is None else min(upto_chunk, len(self.all_camera_poses) - 1)
+
+        centers = []
+        first_chunk_range, first_chunk_extrinsics = self.all_camera_poses[0]
+        for i, idx in enumerate(range(first_chunk_range[0], first_chunk_range[1])):
+            if upto_chunk is not None and idx >= self.chunk_indices[max_chunk][1]:
+                break
+            c2w = first_chunk_extrinsics[i]
+            centers.append(c2w[:3, 3])
+
+        for chunk_idx in range(1, max_chunk + 1):
+            chunk_range, chunk_extrinsics = self.all_camera_poses[chunk_idx]
+            s, R, t = self.sim3_list[chunk_idx - 1]
+
+            S = np.eye(4)
+            S[:3, :3] = s * R
+            S[:3, 3] = t
+
+            for i, idx in enumerate(range(chunk_range[0], chunk_range[1])):
+                c2w = chunk_extrinsics[i]
+                transformed_c2w = S @ c2w
+                transformed_c2w[:3, :3] /= s
+                centers.append(transformed_c2w[:3, 3])
+
+        return np.array(centers)
     
     def close(self):
         '''
