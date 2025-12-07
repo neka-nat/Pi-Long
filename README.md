@@ -100,6 +100,10 @@ Download all the pre-trained weights needed:
 bash ./scripts/download_weights.sh
 ```
 
+```bash
+uv run python scripts/webcam_rerun_demo.py --config configs/base_config.yaml --camera 0 --chunk_size 8 --overlap 4 --spawn_viewer
+```
+
 You can skip the next two steps if you would like to run `Pi-Long` in pure `Python`.
 
 #### Step 3 (Optional) : Compile Loop-Closure Correction Module
